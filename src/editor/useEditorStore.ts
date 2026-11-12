@@ -25,7 +25,7 @@ import {
   withCanvasSize,
   withFrameLayers,
 } from './projectCommands'
-import { applyToolAt, cancelLineTool, type LinePending } from './toolController'
+import { applyStrokeSegment, applyToolAt, cancelLineTool, type LinePending } from './toolController'
 
 const projects = ref<PixelProject[]>(ensureDefaultProject(loadProjects()))
 const prefs = reactive(loadPreferences())
@@ -33,6 +33,8 @@ const prefs = reactive(loadPreferences())
 const linePending = ref<LinePending | null>(null)
 const isPlaying = ref(false)
 const previewFrameIndex = ref<number | null>(null)
+const isPainting = ref(false)
+let strokeLast: { x: number; y: number } | null = null
 
 const player = createAnimationPlayer({ isPlaying, previewFrameIndex })
 
@@ -89,9 +91,14 @@ watch(
   () => prefs.activeProjectId,
   () => {
     linePending.value = null
+    endStroke()
     player.stop()
   },
 )
+
+watch(isPlaying, (playing) => {
+  if (playing) endStroke()
+})
 
 function recordColorUse(color: string) {
   mutateProject((p) => ({
@@ -109,12 +116,69 @@ function setActiveColor(color: string) {
 function setTool(tool: ToolType) {
   prefs.activeTool = tool
   if (tool !== 'line') linePending.value = null
+  endStroke()
   persistPrefs()
 }
 
 function setCanvasSize(size: CanvasSize) {
   if (!CANVAS_SIZES.includes(size)) return
   mutateProject((p) => withCanvasSize(p, size))
+}
+
+function endStroke() {
+  isPainting.value = false
+  strokeLast = null
+}
+
+function onCanvasPointerDown(x: number, y: number) {
+  if (isPlaying.value || previewFrameIndex.value !== null) return
+  const tool = prefs.activeTool
+  if (tool === 'brush' || tool === 'eraser') {
+    isPainting.value = true
+    strokeLast = { x, y }
+  }
+  onCanvasPointer(x, y)
+}
+
+function onCanvasPointerMove(x: number, y: number) {
+  if (!isPainting.value) return
+  if (isPlaying.value || previewFrameIndex.value !== null) {
+    endStroke()
+    return
+  }
+  const last = strokeLast
+  if (!last || (last.x === x && last.y === y)) return
+
+  const p = activeProject.value
+  const frame = activeFrame.value
+  if (!p || !frame) {
+    endStroke()
+    return
+  }
+
+  const result = applyStrokeSegment(
+    {
+      size: p.canvasSize,
+      layers: frame.layers,
+      activeLayerIndex: p.activeLayerIndex,
+      activeColor: prefs.activeColor,
+      tool: prefs.activeTool,
+      linePending: linePending.value,
+    },
+    last.x,
+    last.y,
+    x,
+    y,
+  )
+  strokeLast = { x, y }
+  if (!result.consumed || result.layers === frame.layers) return
+  mutateProject((proj) =>
+    withFrameLayers(proj, proj.activeFrameIndex, result.layers),
+  )
+}
+
+function onCanvasPointerUp() {
+  endStroke()
 }
 
 function onCanvasPointer(x: number, y: number) {
@@ -169,6 +233,7 @@ function setActiveFrame(index: number) {
   previewFrameIndex.value = null
   mutateProject((p) => ({ ...p, activeFrameIndex: index }))
   linePending.value = cancelLineTool()
+  endStroke()
 }
 
 function addFrame() {
@@ -211,6 +276,7 @@ function createNewProject(name?: string) {
   persistProjects()
   persistPrefs()
   linePending.value = null
+  endStroke()
   player.stop()
 }
 
@@ -218,6 +284,7 @@ function loadProject(id: string) {
   prefs.activeProjectId = id
   persistPrefs()
   linePending.value = null
+  endStroke()
   player.stop()
 }
 
@@ -232,6 +299,7 @@ function deleteProject(id: string) {
   }
   persistProjects()
   persistPrefs()
+  endStroke()
   player.stop()
 }
 
@@ -269,10 +337,14 @@ function buildEditorStore() {
     linePending,
     isPlaying,
     previewFrameIndex,
+    isPainting,
     setActiveColor,
     setTool,
     setCanvasSize,
     onCanvasPointer,
+    onCanvasPointerDown,
+    onCanvasPointerMove,
+    onCanvasPointerUp,
     setActiveLayer,
     toggleLayerVisible,
     deleteLayer,

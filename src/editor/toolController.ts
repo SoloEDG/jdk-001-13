@@ -79,6 +79,24 @@ export function applyToolAt(ctx: ToolContext, x: number, y: number): ToolResult 
   return { layers, linePending: pending, consumed: false }
 }
 
+/**
+ * Applies one brush/eraser drag segment: fills every cell on the path from
+ * (x0, y0) to (x1, y1) so fast pointer movement cannot leave gaps.
+ */
+export function applyStrokeSegment(
+  ctx: ToolContext,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): ToolResult {
+  const color = ctx.tool === 'eraser' ? null : ctx.activeColor
+  const layers = updateActiveLayer(ctx, (pixels) =>
+    drawLine(pixels, ctx.size, x0, y0, x1, y1, color),
+  )
+  return { layers, linePending: null, consumed: true }
+}
+
 export function cancelLineTool(): LinePending | null {
   return null
 }
